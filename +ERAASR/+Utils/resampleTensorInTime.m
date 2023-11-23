@@ -37,12 +37,16 @@ function [data, timeNew] = resampleTensorInTime(data, timeDim, time, varargin)
     end
     
     time = ERAASR.Utils.removeSmallTimeErrors(time, timeDelta, timeReference);
+    
 
     tMin = p.Results.tMin;
     tMax = p.Results.tMax;
+  
     [tMinCalc, tMaxCalc] = p.Results.binAlignmentMode.getTimeLimitsForRebinning(min(time), max(time), origDelta, timeDelta, timeReference);
     if isempty(tMin), tMin = tMinCalc; end
     if isempty(tMax), tMax = tMaxCalc; end
+
+    
     
     timeNew = (tMin:timeDelta:tMax)';
     nDimsOrig = ndims(data);

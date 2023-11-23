@@ -1,18 +1,21 @@
-function [matClean, artPcs, artMat] = cleanMatrixViaPCARegression(mat, nPCs, varargin)
+function [matClean, artPcs, artMat] = cleanMatrixViaPCARegression2(mat,spont, nPCs, varargin)
 
     p = inputParser();
     p.addParameter('omitAdjacentChannelsBandWidth', 1, @isscalar); % number of adjacent channels to omit from the regression
     p.addParameter('pcaOnlyOmitted', false, @islogical); % original method had this false
-
+    p.addParameter('lamda', 0.05, @double);
     p.parse(varargin{:});
-
+    lamda = p.Results.lamda;
     omit = p.Results.omitAdjacentChannelsBandWidth;
 
     % M x N (time x neurons) - here TP x C
     mat = bsxfun(@minus, mat, nanmean(mat, 1));
 
     N= size(mat, 2);
-    coeff = pca(mat);
+%     coeff = pca(mat,spont);
+    
+    coeff = Becket_pca(mat,spont,lamda);% NEW FUNCTION - HERE WE WILL GET OPTIMIZED STUFF
+
     cpart = coeff(:, 1:nPCs); % N x K (neurons --> PCs)
     artPcs = mat * cpart;
     

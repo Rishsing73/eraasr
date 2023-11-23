@@ -19,12 +19,14 @@
     p.addOptional('extractWindowDuration', 360, @isscalar);
     
     p.addParameter('quiet', false, @islogical);
-    p.parse(data, startIndexGuess, varargin{:});
+    p.parse(data, startIndexGuess, varargin{:}); % index when the thresold starts
 
     %% Extract a time window from each trial around the approximate start time that generously encompasses the full artifact
 
     % extract nTrials x alignWindowDuration x nChannels tensor around each
-    % trial's startIndexGuess, taking alignWindowPre sampels before and a
+    % trial's startIndexGuess, taking alignWindowPre samples before. We
+    % take the total window but keeping pre duration in mind cuz that
+    % window will include it
     % total of alignWindowDuration samples
     tensorAlignWindow = ERAASR.extractTensorFromTrialCellArray(data, startIndexGuess - p.Results.alignWindowPre, p.Results.alignWindowDuration, p.Results.alignChannel);
     

@@ -26,7 +26,7 @@ function startIndex = thresholdToFindApproximateOnset(data, Fs, thresholdValue, 
         dataThreshold = ERAASR.highPassFilter(dataThreshold, Fs, 'cornerHz', p.Results.hpCornerHz, ...
             'order', p.Results.hpOrder, 'filtfilt', true, 'subtractFirstSample', true);
     end
-
+    % high pass filter on single channel across all trials and time
     thresh = p.Results.thresholdValue;
 
     % Find threshold crossings
@@ -35,7 +35,7 @@ function startIndex = thresholdToFindApproximateOnset(data, Fs, thresholdValue, 
 
         for iT = 1:numel(data)
             if thresh > 0
-                ind = find(dataThreshold{iT} > thresh, 1, 'first');
+                ind = find(dataThreshold{iT} > thresh, 1, 'first'); % ind will be the index containing the first thresold crossing
             else
                 ind = find(dataThreshold{iT} < thresh, 1, 'first');
             end

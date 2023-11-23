@@ -1,8 +1,9 @@
-function [dataCleaned, extract] = cleanTrials(data, opts)
+function [dataCleaned, extract] = cleanTrials(data,spont, opts)
 
 opts.check();
 
-% Do thresholding to get a slightly better estimate of start time
+% Do thresholding to get a slightly better estimate of start time -
+% thresold is the first time only
 estimStartIndexThreshold = ERAASR.thresholdToFindApproximateOnset(data, opts.Fs, opts.thresholdValue, ... 
     'hpCornerHz', opts.thresholdHPCornerHz, 'thresholdChannel', opts.thresholdChannel);
 
@@ -24,7 +25,7 @@ samplesPre = opts.extractWindowPre - opts.cleanStartSamplesPreThreshold;
 
 %% Clean the artifact tensor using ERAASR
 
-[tensorCleaned, extract] = ERAASR.cleanArtifactTensor(tensorAligned, opts.Fs, 'samplesPre', samplesPre, ...
+[tensorCleaned, extract] = ERAASR.cleanArtifactTensor(tensorAligned,spont, opts.Fs, 'samplesPre', samplesPre, ... % NEW FUNCTION
     'hpCornerHz', opts.cleanHPCornerHz, 'hpOrder', opts.cleanHPOrder, ...
     'upsampleBy', opts.cleanUpsampleBy, ...
     'samplesPerPulse', opts.samplesPerPulse,  'nPulses', opts.nPulses, ...
@@ -40,7 +41,7 @@ samplesPre = opts.extractWindowPre - opts.cleanStartSamplesPreThreshold;
     'cleanPostStim', opts.cleanPostStim, ...
     'showFigures', opts.showFigures, 'plotTrials', opts.plotTrials, 'plotPulses', opts.plotPulses, ...
     'saveFigures', opts.saveFigures, 'figurePath', opts.figurePath, 'saveFigureCommand', opts.saveFigureCommand, ...
-    'quiet', opts.quiet);
+    'quiet', opts.quiet,'lamda',opts.lamda);
 
 %% Reinsert the cleaned tensor into the full trials
 

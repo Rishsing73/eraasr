@@ -51,7 +51,7 @@ classdef Parameters
         figurePath % folder to save the figures
         saveFigures logical = false; % whether to save the figures
         saveFigureCommand = @(filepath) print('-dpng', '-r300', [filepath '.png']); % specify a custom command to save the figure
-        
+        lamda = 0.05;
         quiet logical = false; % if true, don't print anything
     end
    

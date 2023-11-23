@@ -1,8 +1,8 @@
-function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin)
+function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor,spontaneous, varargin)
 % cleanedTensor = cleanArtifactTensor(dataTensor, varargin)
 % dataTensor is nTrials x extractWindowDuration x nChannels
 
-    p = inputParser();
+    p = inputParser(); % good thing to h
     p.addRequired('Fs', @isscalar);
     p.addParameter('hpCornerHz', 200, @isscalar); % light high pass filtering only
     p.addParameter('hpOrder', 4, @isscalar); % order of high-pass filter
@@ -36,6 +36,7 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
     p.addParameter('saveFigureCommand', @(filepath) save([filepath '.png']));
     
     p.addParameter('quiet', false, @islogical);
+    p.addParameter('lamda', 0.05, @double);
     p.parse(varargin{:});
 
     Fs = p.Results.Fs;
@@ -58,22 +59,31 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
     quiet = p.Results.quiet;
     upsample = p.Results.upsampleBy;
     samplesPre = p.Results.samplesPre;
-    pulseLen = p.Results.samplesPerPulse * upsample;
+    pulseLen = p.Results.samplesPerPulse * upsample; % we don't do any upsample, don't need to
     nPulses = p.Results.nPulses;
-    totalTrainSamples = pulseLen * nPulses;
+    lamda = p.Results.lamda;
+    totalTrainSamples = pulseLen * nPulses; 
     
 
     dataTensorCleaned = dataTensor;
     
-    if upsample > 1
+    if upsample > 1 % LOOK INTO IT - it should not fuck up anything, let's try it out
         tvec = 1:size(dataTensor, 2);
         dataTensor = ERAASR.Utils.resampleTensorInTime(dataTensor, 2, tvec, 'timeDelta', 1/upsample);
     end
 
+
     % very light filtering of stim trials before artifact computation
-    if p.Results.hpCornerHz > 0
+    if p.Results.hpCornerHz > 0 % default is 200Hz, no need to poke in it
         if ~quiet, fprintf('Filtering before performing artifact subtraction\n'); end
         dataTensor = ERAASR.highPassFilter(dataTensor, Fs, 'cornerHz', p.Results.hpCornerHz, ...
+            'order', p.Results.hpOrder, 'filtfilt', true, 'subtractFirstSample', true);
+    end
+    
+    % high pass filter of spontaneous activity
+    if p.Results.hpCornerHz > 0 % default is 200Hz, no need to poke in it
+        if ~quiet, fprintf('Filtering before performing artifact subtraction on spontanoeus activity\n'); end
+        spontaneous = ERAASR.highPassFilter(spontaneous, Fs, 'cornerHz', p.Results.hpCornerHz, ...
             'order', p.Results.hpOrder, 'filtfilt', true, 'subtractFirstSample', true);
     end
 
@@ -81,11 +91,14 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
     nTraces = size(dataTensor, 1);
     nChannels = size(dataTensor, 3);
     
-    if samplesPre + totalTrainSamples > size(dataTensor, 2)
+
+    if samplesPre + totalTrainSamples > size(dataTensor, 2) % samples pre pulse and total samples calculated for artifacts should be more than given
+        
         error('dataTensor does not have enough timepoints for samplesPre + totalTrainSamples');
     end
     
-    dataTensor_idxTime = samplesPre + (1:totalTrainSamples);
+    dataTensor_idxTime = samplesPre + (1:totalTrainSamples); % which time points have the stim
+
     segmentTensorRaw = reshape(dataTensor(:, dataTensor_idxTime, :), [nTraces, pulseLen, nPulses, nChannels]);
 
     if showFigures
@@ -102,30 +115,49 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
     % Clean over channels using PCA technique
     %%%%%%%
    
-    segmentTensorCached = segmentTensorRaw;
+    segmentTensorCached = segmentTensorRaw; % [nTraces, pulseLen, nPulses, nChannels]
 
     % subtract mean over time points
-    segmentTensor = bsxfun(@minus, segmentTensorRaw, nanmean(segmentTensorRaw, 2));
+    segmentTensor = bsxfun(@minus, segmentTensorRaw, nanmean(segmentTensorRaw, 2)); % mean across pulselen; pulse is same across all trials, etc..
     extract.segmentTensor = segmentTensor; %#ok<*AGROW>
 
     if nPC_channels > 0
         if ~quiet, fprintf('Cleaning over channels using %d PCs\n', nPC_channels); end
 
         if p.Results.cleanOverChannelsIndividualTrials
-            % originally R x T x P x C
+            % originally R x T x P x C; R is trial
             % TP x C x R --> each PC is TP x 1 for each R
-            pcaMatOverTrials = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 3], 4, 1});
+            pcaMatOverTrials = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 3], 4, 1}); % TP x c x r - (T1, tT2, T3, ...TP)
             pcaArt = nan(size(pcaMatOverTrials));
 
+            
             pcaCleaned = nan(size(pcaMatOverTrials));
             
             if ~quiet, prog = ERAASR.Utils.ProgressBar(nTraces, 'Cleaning over channels for each individual trial'); end
             for r = 1:nTraces
                 if ~quiet, prog.update(r); end
-                pcaMat = pcaMatOverTrials(:, :, r); % TP x C
-                [pcaCleaned(:, :, r), artPcs, pcaArt(:, :, r)] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_channels, ...
-                    'omitAdjacentChannelsBandWidth', obw_channels, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
+                pcaMat = pcaMatOverTrials(:, :, r); % TP x C - A 2d matrix over each trial
+                spontmat = spontaneous(:,:,r);
+                
+                % INTERESTING HERE WE HAVE TP x C -
+                
+%                 [pcaCleaned(:, :, r), artPcs, pcaArt(:, :, r)] = ERAASR.cleanMatrixViaPCARegression2(pcaMat,spontmat, nPC_channels, ... % NEW FUNCTION WITH 2 MATRICES
+%                     'omitAdjacentChannelsBandWidth', obw_channels, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted,'lamda', lamda);
+
+                % --------------------OLD PCA FUNCTION----------------------
+                 [pcaCleaned(:, :, r), artPcs, pcaArt(:, :, r)] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_channels, ... % NEW FUNCTION WITH 2 MATRICES
+                     'omitAdjacentChannelsBandWidth', obw_channels, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
+
+                for trial = 1:size(pcaCleaned,3)
+                    for rows = 1:size(pcaCleaned,2)
+                        data_f= replaceHighDiffWithAvg(pcaCleaned(:,rows,trial),0.08,0.05); % VERY SENSITIVE PARAMETERs
+                        pcaCleaned(:,rows,trial) = data_f;
+                    end
+                end
+               
+
             end
+            
             if ~quiet, prog.finish(); end
             segmentTensor = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 3], 4, 1}, size(segmentTensor));
 
@@ -134,9 +166,12 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
         else
             % clean using PCA + regression
             % RTP x C --> each PC is RTP x 1
+
             pcaMat = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 3 1], 4});
             [pcaCleaned, artPcs, artMat] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_channels, ...
                 'omitAdjacentChannelsBandWidth', obw_channels, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
+            
+            
             segmentTensor = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 3 1], 4}, size(segmentTensor));
 
             % reconstruct artifact detection into segmentTensor shape
@@ -149,6 +184,7 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
         extract.pcaArt_channels = artPcs;
         extract.tensorArtifact_cleanedChannels = tensorArtifact;
         extract.segmentTensor_cleanedChannels = segmentTensor;
+        
 
         if showFigures
             % show stacked pcs over channels
@@ -179,190 +215,191 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
     % Clean over pulses using PCA
     %%%%%%%
 
-    segmentTensorCache = segmentTensor;
+%     segmentTensorCache = segmentTensor;
+% 
+%     if p.Results.alignPulsesOverTrain
+%         % align pulses over the train to each other using delays computed
+%         % from the raw uncleaned segmentTensor
+%         delays = ERAASR.Utils.findDelaysTensor(segmentTensorRaw, ...
+%             'alignTo', 'first', 'quiet', quiet, ...
+%             'timeDimension', 2, 'simultaneousDimensions', 4, 'alignToEachOtherDimensions', 3, ...
+%             'upsample', 10, 'message', 'Aligning each pulse to others in train');
+% 
+%         segmentTensor = ERAASR.Utils.removeDelaysTensor(segmentTensor, delays, ...
+%             'fillMode', 'hold', 'quiet', quiet, ...
+%             'timeDimension', 2, 'simultaneousDimensions', 4, 'alignToEachOtherDimensions', 3, ...
+%             'upsample', 10, 'message',  'Applying alignments to cleaned pulses');
+%     end
+% 
+%     % clean by deleting top modes of PCA
+%     % we only do cleaning on some timepoints within the pulse and then
+%     % splice the cleaned data back in (these are the timepoints where
+%     % the pulse occurs)
+% 
+%     segmentTensorCached = segmentTensor;
+%     % in case we only want to look at the inital part of each pulse
+%     timeInPulseIdx = 1:pulseLen;
+%     segmentTensorPartial = segmentTensor(:, timeInPulseIdx, :, :);
+% 
+%     if nPC_pulses > 0
+%         if ~quiet, fprintf('Cleaning over pulses using %d PCs\n', nPC_pulses); end
+%         if p.Results.cleanOverPulsesIndividualChannels
+%             % originally R x T x P x C
+%             % to TR x P x C --> each PC is TR x 1 for each C
+%             pcaMatOverChannels = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 1], 3, 4});
+%             pcaArt = nan(size(pcaMatOverChannels));
+% 
+%             pcaCleaned = nan(size(pcaMatOverChannels));
+%             
+%             if ~quiet, prog = ERAASR.Utils.ProgressBar(nChannels, 'Cleaning over pulses for each individual channel'); end
+%             for c = 1:nChannels
+%                 if ~quiet, prog.update(r); end
+%                 pcaMat = pcaMatOverChannels(:, :, c); % TR x 1, weights are P x 1
+%                 [pcaCleaned(:, :, c), ~, pcaArt(:, :, c)] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_pulses, ...
+%                     'omitAdjacentChannelsBandWidth', obw_pulses, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
+%             end
+%             if ~quiet, prog.finish(); end
+%             
+%             segmentTensorPartial = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 1], 3, 4}, size(segmentTensorPartial));
+% 
+%             % reconstruct artifact detection into segmentTensor shape
+%             tensorArtifact = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaArt, {[2 1], 3, 4}, size(segmentTensorPartial));
+% 
+%         else
+%             % TRC x P --> each PC is TRC x 1, weights are P x 1,
+%             pcaMat = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensorPartial, {[2 1 4], 3});
+%             [pcaCleaned, ~, pcaArt] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_pulses, ...
+%                 'omitAdjacentChannelsBandWidth', obw_pulses, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
+% 
+%             segmentTensorPartial = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 1 4], 3}, size(segmentTensorPartial));
+% 
+%             tensorArtifact = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaArt, {[2 1 4], 3}, size(segmentTensorPartial));
+%         end
+% 
+%         % store preserving continuity to the right
+%         if max(timeInPulseIdx) == pulseLen
+%             segmentTensor = segmentTensorPartial;
+%         else
+%             spliceStart = timeInPulseIdx(end)+1;
+%             oldDelta = segmentTensor(:, spliceStart, :, :) - segmentTensor(:, spliceStart-1, :, :);
+%             segmentTensor(:, timeInPulseIdx, :, :) = segmentTensorPartial;
+%             currentDelta = segmentTensor(:, spliceStart, :, :) - segmentTensor(:, spliceStart-1, :, :);
+%             segmentTensor(:, spliceStart:end, :, :) = bsxfun(@minus, segmentTensor(:, spliceStart:end, :, :), currentDelta - oldDelta);
+%         end
+% 
+%         % transform back to pca mat
+%         % each trial is corrupted by a sum of artifacts
+%         % clean by deleting top 3 modes of PCA
+%         % TP x R x 1 for each C--> each PC is TPC x 1
+%         segmentTensor = bsxfun(@minus, segmentTensor, nanmean(segmentTensor, 2));
+% 
+%         extract.pcaArt_pulses = pcaArt;
+%         extract.tensorArtifact_cleanedPulses = tensorArtifact;
+%         extract.segmentTensor_cleanedPulses = segmentTensor;
+% 
+%         if showFigures
+%             for iR = 1:numel(plotTrialIdx)
+%                 figSetName('pulses_artifacts_overPulses_trial%d', plotTrialIdx(iR));
+%                 ERAASR.PlotUtils.plotRawWithArtifactOverPulsesAllChannels(segmentTensorCache, tensorArtifact, plotTrialIdx(iR));
+%                 saveFig();
+% 
+%                 figSetName('pulses_prePost_overPulses_trial%d', plotTrialIdx(iR));
+%                 ERAASR.PlotUtils.plotBeforeAfterOverTrainAllChannels(segmentTensorCached, segmentTensor, plotTrialIdx(iR));
+%                 saveFig();
+% 
+%                 figSetName('pulses_cleaned_overPulses_trial%d', plotTrialIdx(iR));
+%                 ERAASR.PlotUtils.plotOverTrainAllChannels(segmentTensor, plotTrialIdx(iR));
+%                 saveFig();
+%             end
+% 
+%             for iP = 1:numel(plotPulseIdx)
+%                 figSetName('pulses_overTrials_pulse%d', plotPulseIdx(iP));
+%                 ERAASR.PlotUtils.plotOverTrialsAllChannels(segmentTensor, plotPulseIdx(iP));
+%                 saveFig();
+%             end
+%         end
+%     end
+% 
+%     %%%%%%%
+%     % Clean over trials using PCA
+%     %%%%%%%
 
-    if p.Results.alignPulsesOverTrain
-        % align pulses over the train to each other using delays computed
-        % from the raw uncleaned segmentTensor
-        delays = ERAASR.Utils.findDelaysTensor(segmentTensorRaw, ...
-            'alignTo', 'first', 'quiet', quiet, ...
-            'timeDimension', 2, 'simultaneousDimensions', 4, 'alignToEachOtherDimensions', 3, ...
-            'upsample', 10, 'message', 'Aligning each pulse to others in train');
-
-        segmentTensor = ERAASR.Utils.removeDelaysTensor(segmentTensor, delays, ...
-            'fillMode', 'hold', 'quiet', quiet, ...
-            'timeDimension', 2, 'simultaneousDimensions', 4, 'alignToEachOtherDimensions', 3, ...
-            'upsample', 10, 'message',  'Applying alignments to cleaned pulses');
-    end
-
-    % clean by deleting top modes of PCA
-    % we only do cleaning on some timepoints within the pulse and then
-    % splice the cleaned data back in (these are the timepoints where
-    % the pulse occurs)
-
-    segmentTensorCached = segmentTensor;
-    % in case we only want to look at the inital part of each pulse
-    timeInPulseIdx = 1:pulseLen;
-    segmentTensorPartial = segmentTensor(:, timeInPulseIdx, :, :);
-
-    if nPC_pulses > 0
-        if ~quiet, fprintf('Cleaning over pulses using %d PCs\n', nPC_pulses); end
-        if p.Results.cleanOverPulsesIndividualChannels
-            % originally R x T x P x C
-            % to TR x P x C --> each PC is TR x 1 for each C
-            pcaMatOverChannels = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 1], 3, 4});
-            pcaArt = nan(size(pcaMatOverChannels));
-
-            pcaCleaned = nan(size(pcaMatOverChannels));
-            
-            if ~quiet, prog = ERAASR.Utils.ProgressBar(nChannels, 'Cleaning over pulses for each individual channel'); end
-            for c = 1:nChannels
-                if ~quiet, prog.update(r); end
-                pcaMat = pcaMatOverChannels(:, :, c); % TR x 1, weights are P x 1
-                [pcaCleaned(:, :, c), ~, pcaArt(:, :, c)] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_pulses, ...
-                    'omitAdjacentChannelsBandWidth', obw_pulses, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
-            end
-            if ~quiet, prog.finish(); end
-            
-            segmentTensorPartial = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 1], 3, 4}, size(segmentTensorPartial));
-
-            % reconstruct artifact detection into segmentTensor shape
-            tensorArtifact = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaArt, {[2 1], 3, 4}, size(segmentTensorPartial));
-
-        else
-            % TRC x P --> each PC is TRC x 1, weights are P x 1,
-            pcaMat = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensorPartial, {[2 1 4], 3});
-            [pcaCleaned, ~, pcaArt] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_pulses, ...
-                'omitAdjacentChannelsBandWidth', obw_pulses, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
-
-            segmentTensorPartial = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 1 4], 3}, size(segmentTensorPartial));
-
-            tensorArtifact = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaArt, {[2 1 4], 3}, size(segmentTensorPartial));
-        end
-
-        % store preserving continuity to the right
-        if max(timeInPulseIdx) == pulseLen
-            segmentTensor = segmentTensorPartial;
-        else
-            spliceStart = timeInPulseIdx(end)+1;
-            oldDelta = segmentTensor(:, spliceStart, :, :) - segmentTensor(:, spliceStart-1, :, :);
-            segmentTensor(:, timeInPulseIdx, :, :) = segmentTensorPartial;
-            currentDelta = segmentTensor(:, spliceStart, :, :) - segmentTensor(:, spliceStart-1, :, :);
-            segmentTensor(:, spliceStart:end, :, :) = bsxfun(@minus, segmentTensor(:, spliceStart:end, :, :), currentDelta - oldDelta);
-        end
-
-        % transform back to pca mat
-        % each trial is corrupted by a sum of artifacts
-        % clean by deleting top 3 modes of PCA
-        % TP x R x 1 for each C--> each PC is TPC x 1
-        segmentTensor = bsxfun(@minus, segmentTensor, nanmean(segmentTensor, 2));
-
-        extract.pcaArt_pulses = pcaArt;
-        extract.tensorArtifact_cleanedPulses = tensorArtifact;
-        extract.segmentTensor_cleanedPulses = segmentTensor;
-
-        if showFigures
-            for iR = 1:numel(plotTrialIdx)
-                figSetName('pulses_artifacts_overPulses_trial%d', plotTrialIdx(iR));
-                ERAASR.PlotUtils.plotRawWithArtifactOverPulsesAllChannels(segmentTensorCache, tensorArtifact, plotTrialIdx(iR));
-                saveFig();
-
-                figSetName('pulses_prePost_overPulses_trial%d', plotTrialIdx(iR));
-                ERAASR.PlotUtils.plotBeforeAfterOverTrainAllChannels(segmentTensorCached, segmentTensor, plotTrialIdx(iR));
-                saveFig();
-
-                figSetName('pulses_cleaned_overPulses_trial%d', plotTrialIdx(iR));
-                ERAASR.PlotUtils.plotOverTrainAllChannels(segmentTensor, plotTrialIdx(iR));
-                saveFig();
-            end
-
-            for iP = 1:numel(plotPulseIdx)
-                figSetName('pulses_overTrials_pulse%d', plotPulseIdx(iP));
-                ERAASR.PlotUtils.plotOverTrialsAllChannels(segmentTensor, plotPulseIdx(iP));
-                saveFig();
-            end
-        end
-    end
-
-    %%%%%%%
-    % Clean over trials using PCA
-    %%%%%%%
-
-    if nPC_trials > 0
-        if ~quiet, fprintf('Cleaning over trials using %d PCs\n', nPC_trials); end
-        
-        segmentTensorCached = segmentTensor;
-
-        if p.Results.cleanOverTrialsIndividualChannels
-            % TP x R x CPP
-            pcaMatOverChannels = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 3], 1, 4});
-            pcaArt = nan(size(pcaMatOverChannels));
-
-            pcaCleaned = nan(size(pcaMatOverChannels));
-            if ~quiet, prog = ERAASR.Utils.ProgressBar(nChannels, 'Cleaning over trials for each individual channel'); end
-            for c = 1:nChannels
-                if ~quiet, prog.update(c); end
-                pcaMat = pcaMatOverChannels(:, :, c); % TP x R
-                [pcaCleaned(:, :, c), ~, pcaArt(:, :, c)] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_trials, ...
-                    'omitAdjacentChannelsBandWidth', obw_trials, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
-            end
-            if ~quiet, prog.finish(); end
-
-            segmentTensor = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 3], 1, 4}, size(segmentTensor));
-            
-            % reconstruct artifact into segmentTensor shape
-            tensorArtifact = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaArt, {[2 3], 1, 4}, size(segmentTensor));
-
-        else
-            % originally R x T x P x C
-            % TPC x R --> each PC is TPC x 1, weights are R x 1,
-            pcaMat = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 3 4], 1});
-            [pcaCleaned, ~, pcaArt] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_trials, ...
-                'omitAdjacentChannelsBandWidth', obw_trials, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
-
-            segmentTensor = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 3 4], 1}, size(segmentTensor));
-            
-            % reconstruct artifact into segmentTensor shape
-            tensorArtifact = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaArt, {[2 3 4], 1}, size(segmentTensor));
-        end
-
-        % subtract mean over timepoints again
-        segmentTensor = bsxfun(@minus, segmentTensor, nanmean(segmentTensor, 2));
-  
-        extract.pcaArt_trials = pcaArt;
-        extract.tensorArtifact_cleanedTrials = tensorArtifact;
-        extract.segmentTensor_cleanedTrials = segmentTensor;
-        
-        extract.tensorArtifact_total = segmentTensorRaw - segmentTensor;
-
-        if showFigures
-            for iP = 1:numel(plotPulseIdx)
-                figSetName('trials_artifacts_overTrials_pulse%d', plotPulseIdx(iP));
-                ERAASR.PlotUtils.plotRawWithArtifactOverTrialsAllChannels(segmentTensorCached, tensorArtifact, 1);
-                saveFig();
-
-                figSetName('trials_beforeAfter_overTrials_pulse%d', plotPulseIdx(iP));
-                ERAASR.PlotUtils.plotBeforeAfterOverTrialsAllChannels(segmentTensorCached, segmentTensor, plotPulseIdx(iP));
-                saveFig();
-
-                figSetName('trials_cleaned_overTrials_pulse%d', plotPulseIdx(iP));
-                ERAASR.PlotUtils.plotOverTrialsAllChannels(segmentTensor, 1);
-                saveFig();
-            end
-
-            for iR = 1:numel(plotTrialIdx(iR))
-                figSetName('trials_cleaned_overPulses_trial%d', plotTrialIdx(iR));
-                ERAASR.PlotUtils.plotOverTrainAllChannels(segmentTensor, plotTrialIdx(iR));
-                saveFig();
-            end
-        end
-    end
+%     if nPC_trials > 0
+%         if ~quiet, fprintf('Cleaning over trials using %d PCs\n', nPC_trials); end
+%         
+%         segmentTensorCached = segmentTensor;
+% 
+%         if p.Results.cleanOverTrialsIndividualChannels
+%             % TP x R x CPP
+%             pcaMatOverChannels = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 3], 1, 4});
+%             pcaArt = nan(size(pcaMatOverChannels));
+% 
+%             pcaCleaned = nan(size(pcaMatOverChannels));
+%             if ~quiet, prog = ERAASR.Utils.ProgressBar(nChannels, 'Cleaning over trials for each individual channel'); end
+%             for c = 1:nChannels
+%                 if ~quiet, prog.update(c); end
+%                 pcaMat = pcaMatOverChannels(:, :, c); % TP x R
+%                 [pcaCleaned(:, :, c), ~, pcaArt(:, :, c)] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_trials, ...
+%                     'omitAdjacentChannelsBandWidth', obw_trials, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
+%             end
+%             if ~quiet, prog.finish(); end
+% 
+%             segmentTensor = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 3], 1, 4}, size(segmentTensor));
+%             
+%             % reconstruct artifact into segmentTensor shape
+%             tensorArtifact = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaArt, {[2 3], 1, 4}, size(segmentTensor));
+% 
+%         else
+%             % originally R x T x P x C
+%             % TPC x R --> each PC is TPC x 1, weights are R x 1,
+%             pcaMat = ERAASR.TensorUtils.reshapeByConcatenatingDims(segmentTensor, {[2 3 4], 1});
+%             [pcaCleaned, ~, pcaArt] = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_trials, ...
+%                 'omitAdjacentChannelsBandWidth', obw_trials, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
+% 
+%             segmentTensor = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[2 3 4], 1}, size(segmentTensor));
+%             
+%             % reconstruct artifact into segmentTensor shape
+%             tensorArtifact = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaArt, {[2 3 4], 1}, size(segmentTensor));
+%         end
+% 
+%         % subtract mean over timepoints again
+%         segmentTensor = bsxfun(@minus, segmentTensor, nanmean(segmentTensor, 2));
+%   
+%         extract.pcaArt_trials = pcaArt;
+%         extract.tensorArtifact_cleanedTrials = tensorArtifact;
+%         extract.segmentTensor_cleanedTrials = segmentTensor;
+%         
+%         extract.tensorArtifact_total = segmentTensorRaw - segmentTensor;
+% 
+%         if showFigures
+%             for iP = 1:numel(plotPulseIdx)
+%                 figSetName('trials_artifacts_overTrials_pulse%d', plotPulseIdx(iP));
+%                 ERAASR.PlotUtils.plotRawWithArtifactOverTrialsAllChannels(segmentTensorCached, tensorArtifact, 1);
+%                 saveFig();
+% 
+%                 figSetName('trials_beforeAfter_overTrials_pulse%d', plotPulseIdx(iP));
+%                 ERAASR.PlotUtils.plotBeforeAfterOverTrialsAllChannels(segmentTensorCached, segmentTensor, plotPulseIdx(iP));
+%                 saveFig();
+% 
+%                 figSetName('trials_cleaned_overTrials_pulse%d', plotPulseIdx(iP));
+%                 ERAASR.PlotUtils.plotOverTrialsAllChannels(segmentTensor, 1);
+%                 saveFig();
+%             end
+% 
+%             for iR = 1:numel(plotTrialIdx(iR))
+%                 figSetName('trials_cleaned_overPulses_trial%d', plotTrialIdx(iR));
+%                 ERAASR.PlotUtils.plotOverTrainAllChannels(segmentTensor, plotTrialIdx(iR));
+%                 saveFig();
+%             end
+%         end
+%     end
 
     % Rebuild timeseries
 
     % adjust adjacent pieces of the tensor to preserve continuity
     % N x T x P x C
     segmentTensorCont = segmentTensor;
+    
     for iPulse = 1:nPulses
         if iPulse == 1
             % restore first timepoint to previous value
@@ -374,7 +411,6 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
     end
     segmentTensorCleaned = segmentTensorCont;
     insert = reshape(segmentTensorCleaned, [nTraces, pulseLen * nPulses, nChannels]);
-    
     % reinsert artifact subtracted pieces into original signal, bias post-stim data to preserve continuity
     dataTensor(:, dataTensor_idxTime, :) = insert;
     
@@ -390,14 +426,14 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
         % subtract mean over time (R x T x C)
         meanEachTrialChannel = nanmean(dataPostStim, 2);
         dataPostStim = bsxfun(@minus, dataPostStim, meanEachTrialChannel);
-
+        % CHANNEL SATURATED???
         % RT x C
         pcaMat = ERAASR.TensorUtils.reshapeByConcatenatingDims(dataPostStim, {[1 2] 3});
         pcaCleaned = ERAASR.cleanMatrixViaPCARegression(pcaMat, nPC_channels, ...
             'omitAdjacentChannelsBandWidth', obw_channels, 'pcaOnlyOmitted', p.Results.pcaOnlyOmitted);
         dataPostStim = ERAASR.TensorUtils.undoReshapeByConcatenatingDims(pcaCleaned, {[1 2], 3}, size(dataPostStim));
 
-        % subtract mean over trials
+        % subtract mean over trial
         dataPostStim = bsxfun(@minus, dataPostStim, nanmean(dataPostStim, 1));
 
         delta = bsxfun(@minus, dataPostStim(:, 1, :), dataTensor(:, dataTensor_idxTime(end), :));
@@ -405,24 +441,32 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
 
         dataTensor(:, (dataTensor_idxTime(end)+1) : end, :) = dataPostStim;
     end
-    
+
     % downsample dataTensor if it was upsampled
     if upsample > 1
         if ~quiet
             fprintf('Downsampling dataTensor\n');
         end
-        tvec = (1:size(dataTensor, 2)) / upsample;
+        tvec = (1:size(dataTensor, 2)) / upsample; % we are keeping timedelta 1 which is weird 
+        % which means we have to look how does it uses this tvec to
+        % downsample the stuff - we don't need to - need to figure
+        % something - the problem is defeinitely here. we are just
+        % resampling stuff with timedelta 1, 
         dataTensor = ERAASR.Utils.resampleTensorInTime(dataTensor, 2, tvec, 'timeDelta', 1);
     end
-    
+  
     % reinsert the cleaned data into the raw, unfiltered data tensor, since
     % acausal filtering can add a transient to the pre-cleaned data
-    % maintain continuity at the insert point
+    % maintain continuity at the insert point - this levelling the clean
+    % data - it is all good
+
+
     delta = bsxfun(@minus, dataTensor(:, samplesPre+1, :), dataTensorCleaned(:, samplesPre, :));
     dataTensor = bsxfun(@minus, dataTensor, delta);
-    
     dataTensorRaw = dataTensorCleaned;
-    dataTensorCleaned(:, (samplesPre+1) : end, :) = dataTensor(:, (samplesPre+1) : end, :);
+
+    dataTensorCleaned(:, (samplesPre+1) : end, :) = dataTensor(:, (samplesPre+1) : end, :); % HERE if we move datatensor a back a lil???
+
     extract.artifact_total = dataTensorRaw - dataTensorCleaned;
     
     function figSetName(varargin)

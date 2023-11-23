@@ -1,4 +1,4 @@
-classdef BinAlignmentMode < int32
+  classdef BinAlignmentMode < int32
     enumeration
         Centered (1)
         Causal (2) % align bin so that all spikes came before the timepoint
@@ -34,6 +34,9 @@ classdef BinAlignmentMode < int32
         end
         
         function [tMinNew, tMaxNew] = getTimeLimitsForRebinning(mode, tMinOrig, tMaxOrig, origDelta, newDelta, timeReference)
+            % what is this function doing
+            % returning the new time for new delta (when downsampel it will
+            % be 1 or more
             if nargin < 6
                 timeReference = 0;
             end
@@ -50,7 +53,7 @@ classdef BinAlignmentMode < int32
                 switch mode
                     % the assumption here is that we treat the existing time
                     % bins (with width origDelta) as having the same
-                    % binAlignmentMode as mode.
+                    % binAlignmentMode as mode. 
                     case ERAASR.Utils.BinAlignmentMode.Causal
                         tMinNew = timeReference + ERAASR.Utils.ceiltol((tMinOrig - origDelta - timeReference + newDelta) ./ newDelta, tol) .* newDelta;
                         tMaxNew = timeReference + ERAASR.Utils.floortol((tMaxOrig - timeReference) / newDelta, tol) * newDelta;
@@ -60,6 +63,7 @@ classdef BinAlignmentMode < int32
                     case ERAASR.Utils.BinAlignmentMode.Centered
                         tMinNew = timeReference + ERAASR.Utils.ceiltol((tMinOrig - origDelta/2 - timeReference + newDelta/2) ./ newDelta, tol) .* newDelta;
                         tMaxNew = timeReference + ERAASR.Utils.floortol((tMaxOrig + origDelta/2 - timeReference - newDelta/2) ./ newDelta, tol) .* newDelta;
+                        
                 end
             end
                     
