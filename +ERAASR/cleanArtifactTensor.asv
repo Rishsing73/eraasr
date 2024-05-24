@@ -1,4 +1,4 @@
-function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin)
+function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor,spontaneous, varargin)
 % cleanedTensor = cleanArtifactTensor(dataTensor, varargin)
 % dataTensor is nTrials x extractWindowDuration x nChannels
 
@@ -411,7 +411,15 @@ function [dataTensorCleaned, extract] = cleanArtifactTensor(dataTensor, varargin
     %RISHABH - here we will remove 20 length index to 0 from the pulse
     %start using dataTensor_idxTime
     mean_value_v = nanmean(segmentTensorCont(:,1:20,:,:),2);
-    segmentTensorCont(:,37:56,:,:) =  repmat(mean_value_v,[1,20,1,1]);
+    keyboard
+    B = 0.2+rand(20, 1).*0.01;  % Example data
+
+    % Reshape B to add singleton dimensions
+    B_reshaped = reshape(B, [1, 20, 1, 1]);
+    
+    % Now replicate B across the other dimensions to match 4x20x100x16
+    B_broadcasted = repmat(B_reshaped, [size(segmentTensorCont,1), 1, size(segmentTensorCont,3), size(segmentTensorCont,4)]);
+    segmentTensorCont(:,37:56,:,:) = B_broadcasted;
 
     segmentTensorCleaned = segmentTensorCont;
     insert = reshape(segmentTensorCleaned, [nTraces, pulseLen * nPulses, nChannels]);

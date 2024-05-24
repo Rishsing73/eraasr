@@ -1,8 +1,14 @@
 % the script to use the nwb file to clean the artifacts
 
 % read the file
-filename = '/Users/rishabhsinghal/lab_data/kirk171026.nwb';
-nwb = nwbRead(filename); %CHNAGE
+
+
+nwb = nwbRead('/Users/rishabhsinghal/lab_data/kirk171026.nwb');
+
+% get the artifacts from 16 channels in the nwb file
+
+% step1 - get the indices first - two columns corrosponding to start and
+% stop indices of artifacts
 
 ts = nwb.acquisition.get('Behavior_Timestamp');
 ts = ts.toTable();
@@ -17,19 +23,54 @@ pre_window = 10000;
 post_window = 29999;
 
 % intialise a matrics trial x time x channels
+%%
+
 spike_raw = nwb.acquisition.get('FEF_recording').data(:,:);
+% plot(spike_raw)
+
+%% grab few trials - select all trials
+n_trials = 4;
+stim_ts = stim_ts(1:n_trials);
 
 
-%% grab few trials - select all trials - CHNAGE
-% n_trials = 4; %uncommment if you want to run short data only
-% stim_ts = stim_ts(1:n_trials);
 data_n = NaN(length(stim_ts),40000,16);
+
+
 for i = 1:numel(stim_ts)
     takeout = floor(stim_ts(i)-pre_window);
     takeafter = floor(stim_ts(i) + post_window);
     data_n(i,:,:) = spike_raw(:,takeout:takeafter)';
 end
+%% Grab spontaneous data as well
+data = NaN(40000,16,length(stim_ts));
+for i = 1:numel(stim_ts)
+    takeout = floor(stim_ts(i)- 50000);
+    takeafter = floor(stim_ts(i) - 10000-1);
+    data(:,:,i) = spike_raw(:,takeout:takeafter)';
+end
 
+% % Plotting parameters`
+yOffset = 6;
+% Create the plot iteratively
+% figure;
+% hold on;
+% for channel = 1:16
+%     yValues = channel + yOffset;  % Add offset to y-values
+%     plot(yValues+ data(:,channel,1));
+% end
+% 
+for row = 1:10
+    yValues = row*0.1 + yOffset;  % Add offset to y-values
+    plot(yValues+ data_n(1,:,row));
+end
+% 
+% 
+% % Adjust plot appearance
+% xlabel('time');
+% ylabel('channels');
+% 
+% title('Iterative Plot with Separation');
+% hold off;
 
 %%
 
@@ -68,13 +109,13 @@ opts.omit_bandwidth_pulses = 1;
 opts.alignPulsesOverTrain = true; % do a secondary alignment within each train, in case you think there is pulse to pulse jitter. Works best with upsampling
 opts.pcaOnlyOmitted = false; % if true, build PCs only from non-omitted channels/trials/pulses. if false, build PCs from all but set coefficients to zero post hoc
 opts.lamda = 0.1;
-opts.cleanOverChannelsIndividualTrials = false;
+opts.cleanOverChannelsIndividualTrials = true;
 opts.cleanOverPulsesIndividualChannels = false;
 opts.cleanOverTrialsIndividualChannels = false;
 
 opts.cleanPostStim = false; % clean the post stim window using a single PCR over channels
 
-opts.showFigures = false; % useful for debugging and seeing well how the cleaning works - CHANGE
+opts.showFigures = true; % useful for debugging and seeing well how the cleaning works
 opts.plotTrials = 1; % which trials to plot in figures, can be vector
 opts.plotPulses = 1; % which pulses to plot in figures, can be vector
 opts.figurePath = [pwd '/timon_171101_postbug'];% folder to save the figures
@@ -84,27 +125,39 @@ opts.figurePath = [pwd '/timon_171101_postbug'];% folder to save the figures
 %     disp('The folder does exist.');
 % end
 
-opts.saveFigures = false; % whether to save the figures - CHANGE
+opts.saveFigures = false; % whether to save the figures
 opts.saveFigureCommand = @(filepath) print('-dpng', '-r300', [filepath '.png']); % specify a custom command to save the figure
 
 %% Do alignment and cleaning procedure
 
-[dataCleaned, extract] = ERAASR.cleanTrials(data_n, opts); % we have removed 0.5 ms of data from each pulse - 50 ms of data from 500ms
+[dataCleaned, extract] = ERAASR.cleanTrials(data_n,data, opts);
 
-%% Create the plot iteratively - plot for cleaned data vs uncleaned
+%% Create the plot iteratively - plot for cleaned data
 figure(2);  
 hold on;
-trial = 2;
 yOffset = 10;
 for channel = 1:16
     yValues = channel* yOffset;  % Add offset to y-values
-    plot(yValues+ dataCleaned(trial,:,channel),'r');
-    plot(yValues+ data_n(trial,:,channel),'b');
+    plot(yValues+ dataCleaned(3,:,channel),'r');
+    plot(yValues+ data_n(3,:,channel),'b');
 end
-ylabel('voltage')
-xlabel('time')
+title('clean data')
 
+%% plot for uncleasnwd data
+figure(2);
+hold on;
+yOffset = 5;
+for channel = 1:16
+    yValues = channel + yOffset;  % Add offset to y-values
+    plot(yValues+ data_n(1,:,channel));
+end
+title('uncleaned deata')
 
+%%
+
+figure();
+plot(squeeze(dataCleaned(1, :, 1)),'-');
+box off;
 
 %% PUt the data back into the field
 for i = 1:numel(stim_ts)
@@ -131,4 +184,4 @@ ecephys_module.nwbdatainterface.set('ERRASR', electrical_series);
 nwb.processing.set('ERRASR', ecephys_module);
 
 %% save the file
-nwbExport(nwb, filename) %CHANGE
+nwbExport(nwb, '/Users/rishabhsinghal/lab_data/NWB_files/Timon_1711101_stim_new.nwb')

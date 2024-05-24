@@ -1,4 +1,4 @@
-function [dataCleaned, extract] = cleanTrials(data,spont, opts)
+function [dataCleaned, extract] = cleanTrials(data, opts)
 
 opts.check();
 
@@ -25,7 +25,7 @@ samplesPre = opts.extractWindowPre - opts.cleanStartSamplesPreThreshold;
 
 %% Clean the artifact tensor using ERAASR
 
-[tensorCleaned, extract] = ERAASR.cleanArtifactTensor(tensorAligned,spont, opts.Fs, 'samplesPre', samplesPre, ... % NEW FUNCTION
+[tensorCleaned, extract] = ERAASR.cleanArtifactTensor(tensorAligned, opts.Fs, 'samplesPre', samplesPre, ... % NEW FUNCTION
     'hpCornerHz', opts.cleanHPCornerHz, 'hpOrder', opts.cleanHPOrder, ...
     'upsampleBy', opts.cleanUpsampleBy, ...
     'samplesPerPulse', opts.samplesPerPulse,  'nPulses', opts.nPulses, ...

@@ -19,7 +19,9 @@ function arr = replaceHighDiffWithAvg(arr, threshold1, thresold2)
             arr(idx) = mean(arr(1:idx-1));
         end
     end
+
     diffs = diff(arr);
+    
     highDiffIndices = find((diffs) > thresold2) + 1;
     for idx = highDiffIndices'
         if idx > 5 
